@@ -353,29 +353,20 @@ class MultiHeadAttention(nn.Module):
             # - Dropout
             # - Optimisations mémoire O(N) au lieu de O(N²)
             
-            # Convertir mask pour Flash Attention
-            # Flash veut None (causal auto) ou attention_mask
-            attn_mask = None
-            if mask is not None:
-                # mask est [seq_len, seq_len] bool (True = masqué)
-                # Flash veut [batch, heads, seq_len, seq_len] float (-inf = masqué)
-                attn_mask = torch.zeros(seq_len, seq_len, dtype=q.dtype, device=q.device)
-                attn_mask.masked_fill_(mask, float('-inf'))
-                # Broadcast pour batch et heads
-                attn_mask = attn_mask.unsqueeze(0).unsqueeze(0)
-            
             # YaRN attention scaling (si besoin)
-            scale = None
             if self.use_rope and self.rope.use_yarn and self.rope.yarn_scale > 1.0:
                 scale = math.sqrt(self.rope.yarn_scale) / math.sqrt(self.head_dim)
             else:
                 scale = 1.0 / math.sqrt(self.head_dim)
             
-            # Flash Attention forward
+            # ✅ Flash Attention avec is_causal=True
+            # → PyTorch gère le masque causal en interne en O(n) mémoire
+            # → Pas de tensor attn_mask float explicite = vrai kernel FlashAttention
             output = F.scaled_dot_product_attention(
                 q, k, v,
-                attn_mask=attn_mask,
+                attn_mask=None,
                 dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=True,
                 scale=scale,
             )
         else:
